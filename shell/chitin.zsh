@@ -6,6 +6,8 @@ typeset -g CHITIN_SOCKET_PATH=${CHITIN_SOCKET_PATH:-/tmp/chitin.sock}
 typeset -g CHITIN_CLIENT_TIMEOUT=${CHITIN_CLIENT_TIMEOUT:-10}
 typeset -g CHITIN_ECHO_PROMPT=${CHITIN_ECHO_PROMPT:-1}
 typeset -g CHITIN_SHOW_RESPONSE=${CHITIN_SHOW_RESPONSE:-0}
+# Define alias @=':' so that "@ command" behaves like ": command" (no-op)
+alias @=':'
 
 _chitin_save_history() {
   local entry="$1"
@@ -111,11 +113,11 @@ _chitin_accept_line() {
         # 1. Push the generated command to the *next* buffer stack
         print -z -- "$command"
         
-        # 2. Clear current buffer to avoid executing anything (but keeps proper Prompt/PWD visual)
-        # This creates an "empty" history line in scrollback, but preserves the prompt line.
-        BUFFER=""
+        # 2. Modify buffer to "@ ..." so it matches the alias @=':' and runs as no-op
+        # This keeps the prompt visible on screen (as "@ print ...") without error.
+        BUFFER="@ ${raw_prompt:1}"
         
-        # 3. Accept the current line (runs empty command, moves to next line)
+        # 3. Accept the current line
         zle .accept-line
         return 0
       fi
