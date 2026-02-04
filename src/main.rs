@@ -1,13 +1,15 @@
+mod client;
 mod protocol;
 mod provider;
 mod session;
 
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use protocol::{
-    internal_error, invalid_params, invalid_request, method_not_found, JsonRpcRequest,
-    JsonRpcResponse, ResponseAction,
+    JsonRpcRequest, JsonRpcResponse, ResponseAction, internal_error, invalid_params,
+    invalid_request, method_not_found,
 };
-use provider::{build_provider_from_env, CommandGenerator, Context};
+use provider::{CommandGenerator, Context, build_provider_from_env};
 use serde_json::Value;
 use session::SessionStore;
 use std::fs;
@@ -15,15 +17,54 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 const SOCKET_PATH: &str = "/tmp/chitin.sock";
 const HANDSHAKE_TIMEOUT_MS: u64 = 200;
 
+#[derive(Parser)]
+#[command(name = "chitin", about = "Natural language shell assistant")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Start the backend daemon
+    Daemon,
+    /// Ask the AI for a command
+    Ask {
+        /// The query/prompt
+        prompt: String,
+        /// Current working directory
+        #[arg(long, default_value = ".")]
+        pwd: String,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize logging only if daemon or no command
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Ask { prompt, pwd }) => {
+            client::run(prompt, pwd).await?;
+        }
+        Some(Commands::Daemon) | None => {
+            // Default to daemon mode
+            init_logging();
+            run_daemon().await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn init_logging() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
@@ -31,7 +72,9 @@ async fn main() -> Result<()> {
         .with_ansi(true)
         .pretty()
         .init();
+}
 
+async fn run_daemon() -> Result<()> {
     init_socket()?;
     let listener = UnixListener::bind(SOCKET_PATH)?;
     info!("Chitin: listening on {SOCKET_PATH}");
@@ -65,11 +108,19 @@ async fn handle_connection(
     generator: Arc<dyn CommandGenerator>,
 ) -> Result<()> {
     let mut buffer = Vec::new();
-    let read_result = timeout(Duration::from_millis(HANDSHAKE_TIMEOUT_MS), stream.read_to_end(&mut buffer)).await;
+    let read_result = timeout(
+        Duration::from_millis(HANDSHAKE_TIMEOUT_MS),
+        stream.read_to_end(&mut buffer),
+    )
+    .await;
     let read_ok = match read_result {
         Ok(result) => result?,
         Err(_) => {
-            send_response(&mut stream, invalid_request(Value::Null, "timeout waiting for request")).await?;
+            send_response(
+                &mut stream,
+                invalid_request(Value::Null, "timeout waiting for request"),
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -169,6 +220,11 @@ async fn send_response(stream: &mut UnixStream, response: JsonRpcResponse) -> Re
 
 fn is_broken_pipe(err: &anyhow::Error) -> bool {
     err.downcast_ref::<std::io::Error>()
-        .map(|io| matches!(io.kind(), std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset))
+        .map(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+            )
+        })
         .unwrap_or(false)
 }

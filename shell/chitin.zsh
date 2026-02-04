@@ -24,106 +24,32 @@ _chitin_save_history() {
   fi
 }
 
-_chitin_json_escape() {
-  local value="$1"
-  value=${value//\\/\\\\}
-  value=${value//"/\\"}
-  value=${value//$'\n'/\\n}
-  value=${value//$'\r'/\\r}
-  value=${value//$'\t'/\\t}
-  print -r -- "$value"
-}
-
-_chitin_request_id() {
-  local base=${EPOCHREALTIME//./}
-  if [[ -z $base ]]; then
-    base=$RANDOM
-  fi
-  print -r -- "$base"
-}
-
-_chitin_send_json() {
-  local payload="$1"
-  if command -v nc >/dev/null 2>&1; then
-    local response
-    response=$(printf '%s' "$payload" | nc -U -w "$CHITIN_CLIENT_TIMEOUT" "$CHITIN_SOCKET_PATH" 2>/dev/null)
-    if [[ -n "$response" ]]; then
-      print -r -- "$response"
-      return 0
-    fi
-    return 1
-  fi
-  if command -v socat >/dev/null 2>&1; then
-    print -r -- "$payload" | socat - UNIX-CONNECT:"$CHITIN_SOCKET_PATH"
-    return $?
-  fi
-  return 1
-}
-
-_chitin_extract_command() {
-  local json
-  json=$(</dev/stdin)
-  if [[ $json =~ '"command"[[:space:]]*:[[:space:]]*"([^"]*)"' ]]; then
-    local command="${match[1]}"
-    command=${command//\\\\/\\}
-    command=${command//\\"/"}
-    command=${command//\\n/$'\n'}
-    command=${command//\\r/$'\r'}
-    command=${command//\\t/$'\t'}
-    print -r -- "$command"
-    return 0
-  fi
-  return 1
-}
-
 _chitin_accept_line() {
   if [[ "$BUFFER" == @* ]]; then
     local raw_prompt="$BUFFER"
     # Save the original prompt to history manually since we will clear the execution buffer
     _chitin_save_history "$raw_prompt"
 
-
-    local escaped_prompt=$(_chitin_json_escape "$raw_prompt")
-    local escaped_pwd=$(_chitin_json_escape "$PWD")
-    local session_id=${CHITIN_SESSION_ID:-$USER}
-    local escaped_session=$(_chitin_json_escape "$session_id")
-    local request_id=$(_chitin_request_id)
-
-    local payload="{\"jsonrpc\":\"2.0\",\"id\":\"${request_id}\",\"method\":\"chitin.input\",\"params\":{\"prompt\":\"${escaped_prompt}\",\"pwd\":\"${escaped_pwd}\",\"session_id\":\"${escaped_session}\"}}"
-
-    zle -M "Chitin: ${raw_prompt}"
-    local response
-    response=$(_chitin_send_json "$payload")
-    if [[ -n ${CHITIN_DEBUG:-} ]]; then
-      print -u2 -- "Chitin debug: response: $response"
+    # Call the Rust client
+    # The client prints the spinner to stderr and the result to stdout
+    local command
+    # We use 'command chitin' to ignore aliases, assuming chitin binary is in path
+    if command -v chitin >/dev/null 2>&1; then
+      command=$(chitin ask --prompt "$raw_prompt" --pwd "$PWD")
+    else
+      print -u2 "Chitin binary not found in PATH."
     fi
 
-    if [[ -n "$response" ]]; then
-      local command
-      command=$(print -r -- "$response" | _chitin_extract_command)
-      if [[ -n "$command" ]]; then
-        # Show raw response if enabled
-        if [[ "$CHITIN_SHOW_RESPONSE" == "1" ]]; then
-           # We need zle -I here because we are technically still in the widget
-           # before we accept the line
-           zle -I
-           print -r -- "Response: $response"
-        fi
-        
-        # 1. Push the generated command to the *next* buffer stack
-        print -z -- "$command"
-        
-        # 2. Modify buffer to "@ ..." so it matches the alias @=':' and runs as no-op
-        # This keeps the prompt visible on screen (as "@ print ...") without error.
-        BUFFER="@ ${raw_prompt:1}"
-        
-        # 3. Accept the current line
-        zle .accept-line
-        return 0
-      fi
+    if [[ -n "$command" ]]; then
+       # 1. Push the generated command to the *next* buffer stack
+       print -z -- "$command"
     fi
+     
+    # 2. Modify buffer to "@ ..." so it matches the alias @=':' and runs as no-op
+    # This keeps the prompt visible on screen (as "@ print ...") without error.
+    BUFFER="@ ${raw_prompt:1}"
     
-    # Fallback: just accept the raw prompt (will likely error as command not found, which is fine)
+    # 3. Accept the current line
     zle .accept-line
     return 0
   fi
