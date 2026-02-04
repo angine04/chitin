@@ -45,11 +45,22 @@ enum Commands {
         #[arg(long, default_value = ".")]
         pwd: String,
     },
-    /// Generate service files for init systems
+    /// Manage the background service
     Service {
+        #[command(subcommand)]
+        command: ServiceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ServiceCommands {
+    /// Generate a service file
+    Generate {
         #[arg(value_enum)]
         type_: service::ServiceType,
     },
+    /// Install and start the service automatically
+    Install,
     /// Reload the daemon configuration
     Reload,
 }
@@ -65,13 +76,18 @@ async fn main() -> Result<()> {
         Some(Commands::Ask { prompt, pwd }) => {
             client::run(prompt, pwd).await?;
         }
-        Some(Commands::Service { type_ }) => {
-            let content = service::generate(type_)?;
-            print!("{}", content);
-        }
-        Some(Commands::Reload) => {
-            service::reload()?;
-        }
+        Some(Commands::Service { command }) => match command {
+            ServiceCommands::Generate { type_ } => {
+                let content = service::generate(type_)?;
+                print!("{}", content);
+            }
+            ServiceCommands::Install => {
+                service::install()?;
+            }
+            ServiceCommands::Reload => {
+                service::reload()?;
+            }
+        },
         Some(Commands::Daemon) | None => {
             // Default to daemon mode
             init_logging();
