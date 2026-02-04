@@ -35,7 +35,7 @@ _chitin_accept_line() {
     local command
     # We use 'command chitin' to ignore aliases, assuming chitin binary is in path
     if command -v chitin >/dev/null 2>&1; then
-      command=$(chitin ask --prompt "$raw_prompt" --pwd "$PWD")
+      command=$(chitin ask "$raw_prompt" --pwd "$PWD")
     else
       print -u2 "Chitin binary not found in PATH."
     fi
