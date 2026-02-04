@@ -3,6 +3,7 @@ mod config;
 mod protocol;
 mod provider;
 mod session;
+mod shell;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -50,6 +51,11 @@ enum Commands {
         #[command(subcommand)]
         command: ServiceCommands,
     },
+    /// Manage shell integration
+    Shell {
+        #[command(subcommand)]
+        command: ShellCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -63,6 +69,12 @@ enum ServiceCommands {
     Install,
     /// Reload the daemon configuration
     Reload,
+}
+
+#[derive(Subcommand)]
+enum ShellCommand {
+    /// Install the Zsh plugin
+    Install,
 }
 
 use config::Config;
@@ -86,6 +98,11 @@ async fn main() -> Result<()> {
             }
             ServiceCommands::Reload => {
                 service::reload()?;
+            }
+        },
+        Some(Commands::Shell { command }) => match command {
+            ShellCommand::Install => {
+                shell::install()?;
             }
         },
         Some(Commands::Daemon) | None => {
