@@ -4,40 +4,55 @@ Native Zsh agent that turns `@` prompts into executable shell commands by refill
 
 ## Quick Start
 
-1. Install Chitin (assuming you have it built or installed):
+1. Install Chitin:
 
 ```bash
-# If building from source
 cargo install --path .
 ```
 
-2. Generate and start the background service:
-
-   **macOS (launchd)**
-   ```bash
-   chitin service launchd > ~/Library/LaunchAgents/com.user.chitin.plist
-   launchctl load ~/Library/LaunchAgents/com.user.chitin.plist
-   ```
-
-   **Linux (systemd)**
-   ```bash
-   mkdir -p ~/.config/systemd/user
-   chitin service systemd > ~/.config/systemd/user/chitin.service
-   systemctl --user enable --now chitin
-   ```
-
-3. Source the Zsh plugin in your `.zshrc`:
+1. Setup the background service:
 
 ```bash
-# Point to where you have the script
-source /path/to/chitin/shell/chitin.zsh
+# Automatically detects your OS/init system and installs the service
+chitin service install
 ```
 
-4. Type a prompt in Zsh:
+1. Setup the shell integration:
 
 ```bash
-@find all large logs
+# Installs the shell plugin and updates your ~/.zshrc
+chitin shell install
+
+# Reload your shell
+source ~/.zshrc
 ```
+
+1. Type a prompt in Zsh:
+
+```bash
+@print current directory
+# Should give you: pwd
+```
+
+### Manual Installation
+
+If you prefer to configure things manually or use a different init system:
+
+- `chitin service generate <launchd|systemd|openrc>`: Prints the service file to stdout.
+- You can find the shell plugin source in `shell/chitin.zsh`.
+
+## Supported Environments
+
+### Shells
+
+- ✅ Zsh
+- 🚧 Bash (Planned)
+- 🚧 Fish (Planned)
+
+### Operating Systems
+
+- ✅ macOS (via `launchd`)
+- ✅ Linux (via `systemd` user services or `openrc`)
 
 ## Configuration
 
