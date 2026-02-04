@@ -1,7 +1,6 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::env;
 
 #[derive(Debug, Clone)]
 pub struct Context {
@@ -17,12 +16,13 @@ pub trait CommandGenerator: Send + Sync {
     async fn generate(&self, context: Context) -> Result<String>;
 }
 
-pub fn build_provider_from_env() -> Result<Box<dyn CommandGenerator>> {
-    let provider = env::var("CHITIN_PROVIDER").unwrap_or_else(|_| "openai".to_string());
-    match provider.as_str() {
-        "openai" | "openai-compatible" => Ok(Box::new(OpenAiCompatibleProvider::from_env()?)),
+use crate::config::Config;
+
+pub fn build_provider(config: &Config) -> Result<Box<dyn CommandGenerator>> {
+    match config.provider.type_.as_str() {
+        "openai" | "openai-compatible" => Ok(Box::new(OpenAiCompatibleProvider::new(config)?)),
         "noop" => Ok(Box::new(NoopProvider)),
-        _ => Err(anyhow!("unknown provider: {provider}")),
+        _ => Err(anyhow!("unknown provider: {}", config.provider.type_)),
     }
 }
 
@@ -47,11 +47,28 @@ pub struct OpenAiCompatibleProvider {
 }
 
 impl OpenAiCompatibleProvider {
-    pub fn from_env() -> Result<Self> {
-        let base_url = env::var("CHITIN_API_BASE").unwrap_or_else(|_| "https://api.openai.com".to_string());
-        let api_key = env::var("CHITIN_API_KEY")
-            .map_err(|_| anyhow!("CHITIN_API_KEY is required for openai provider"))?;
-        let model = env::var("CHITIN_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string());
+    pub fn new(config: &Config) -> Result<Self> {
+        let base_url = config
+            .provider
+            .openai
+            .api_base
+            .clone()
+            .unwrap_or_else(|| "https://api.openai.com".to_string());
+
+        let api_key = config
+            .provider
+            .openai
+            .api_key
+            .clone()
+            .ok_or_else(|| anyhow!("API key is required for openai provider"))?;
+
+        let model = config
+            .provider
+            .openai
+            .model
+            .clone()
+            .unwrap_or_else(|| "gpt-4.1-mini".to_string());
+
         let client = Client::new();
         Ok(Self {
             base_url,
@@ -76,11 +93,7 @@ impl OpenAiCompatibleProvider {
         };
         let user = Message {
             role: "user".to_string(),
-            content: format!(
-                "Task: {}\nContext: {}",
-                context.prompt,
-                details.join("; ")
-            ),
+            content: format!("Task: {}\nContext: {}", context.prompt, details.join("; ")),
         };
         vec![system, user]
     }
@@ -89,7 +102,10 @@ impl OpenAiCompatibleProvider {
 #[async_trait::async_trait]
 impl CommandGenerator for OpenAiCompatibleProvider {
     async fn generate(&self, context: Context) -> Result<String> {
-        let url = format!("{}/v1/chat/completions", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/v1/chat/completions",
+            self.base_url.trim_end_matches('/')
+        );
         let request = ChatRequest {
             model: self.model.clone(),
             messages: self.build_prompt(&context),

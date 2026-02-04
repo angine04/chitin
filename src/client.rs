@@ -40,8 +40,10 @@ pub async fn run(prompt: String, pwd: String) -> Result<()> {
         let _spinner = SpinnerGuard::new();
 
         // 2. Connect to Socket
-        let socket_path = "/tmp/chitin.sock";
-        if !Path::new(socket_path).exists() {
+        let config = crate::config::Config::load();
+        let socket_path = config.server.socket_path;
+
+        if !Path::new(&socket_path).exists() {
             return Err(anyhow!(
                 "Chitin daemon is not running (socket not found at {socket_path})"
             ));

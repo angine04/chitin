@@ -1,4 +1,5 @@
 mod client;
+mod config;
 mod protocol;
 mod provider;
 mod session;
@@ -9,7 +10,7 @@ use protocol::{
     JsonRpcRequest, JsonRpcResponse, ResponseAction, internal_error, invalid_params,
     invalid_request, method_not_found,
 };
-use provider::{CommandGenerator, Context, build_provider_from_env};
+use provider::{CommandGenerator, Context};
 use serde_json::Value;
 use session::SessionStore;
 use std::fs;
@@ -21,8 +22,9 @@ use tokio::time::{Duration, timeout};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-const SOCKET_PATH: &str = "/tmp/chitin.sock";
 const HANDSHAKE_TIMEOUT_MS: u64 = 200;
+
+mod service;
 
 #[derive(Parser)]
 #[command(name = "chitin", about = "Natural language shell assistant")]
@@ -43,7 +45,14 @@ enum Commands {
         #[arg(long, default_value = ".")]
         pwd: String,
     },
+    /// Generate service files for init systems
+    Service {
+        #[arg(value_enum)]
+        type_: service::ServiceType,
+    },
 }
+
+use config::Config;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,10 +63,15 @@ async fn main() -> Result<()> {
         Some(Commands::Ask { prompt, pwd }) => {
             client::run(prompt, pwd).await?;
         }
+        Some(Commands::Service { type_ }) => {
+            let content = service::generate(type_)?;
+            print!("{}", content);
+        }
         Some(Commands::Daemon) | None => {
             // Default to daemon mode
             init_logging();
-            run_daemon().await?;
+            let config = Config::load();
+            run_daemon(config).await?;
         }
     }
 
@@ -74,13 +88,13 @@ fn init_logging() {
         .init();
 }
 
-async fn run_daemon() -> Result<()> {
-    init_socket()?;
-    let listener = UnixListener::bind(SOCKET_PATH)?;
-    info!("Chitin: listening on {SOCKET_PATH}");
+async fn run_daemon(config: Config) -> Result<()> {
+    init_socket(&config)?;
+    let listener = UnixListener::bind(&config.server.socket_path)?;
+    info!("Chitin: listening on {}", config.server.socket_path);
 
     let session_store = Arc::new(Mutex::new(SessionStore::new(10)));
-    let provider = Arc::from(build_provider_from_env()?);
+    let provider = Arc::from(provider::build_provider(&config)?);
 
     loop {
         let (stream, _) = listener.accept().await?;
@@ -94,8 +108,8 @@ async fn run_daemon() -> Result<()> {
     }
 }
 
-fn init_socket() -> Result<()> {
-    let path = Path::new(SOCKET_PATH);
+fn init_socket(config: &Config) -> Result<()> {
+    let path = Path::new(&config.server.socket_path);
     if path.exists() {
         fs::remove_file(path)?;
     }
