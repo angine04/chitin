@@ -49,7 +49,11 @@ _chitin_accept_line() {
      
     # 2. Modify buffer to "@ ..." so it matches the alias @=':' and runs as no-op
     # This keeps the prompt visible on screen (as "@ print ...") without error.
-    BUFFER="@ ${raw_prompt:1}"
+    if [[ "${raw_prompt:1}" == \ * ]]; then
+      BUFFER="@${raw_prompt:1}"
+    else
+      BUFFER="@ ${raw_prompt:1}"
+    fi
     
     # 3. Accept the current line
     zle .accept-line
