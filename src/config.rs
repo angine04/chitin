@@ -68,16 +68,22 @@ pub struct OpenAiConfig {
 
 impl Config {
     pub fn load() -> Self {
+        Self::load_reload().unwrap_or_else(|e| {
+            eprintln!("Info: using default config or env vars (reason: {})", e);
+            let mut config = Config::default();
+            merge_env_vars(&mut config);
+            config
+        })
+    }
+
+    pub fn load_reload() -> Result<Self, String> {
         let config_path = get_config_path();
 
         let mut config = if let Some(path) = &config_path {
             if path.exists() {
                 match fs::read_to_string(path) {
-                    Ok(content) => toml::from_str(&content).unwrap_or_else(|e| {
-                        eprintln!("Warning: Failed to parse config file: {}", e);
-                        Config::default()
-                    }),
-                    Err(_) => Config::default(),
+                    Ok(content) => toml::from_str(&content).map_err(|e| e.to_string())?,
+                    Err(e) => return Err(e.to_string()),
                 }
             } else {
                 Config::default()
@@ -88,17 +94,40 @@ impl Config {
 
         // Environment variables override config file
         merge_env_vars(&mut config);
-        config
+        Ok(config)
     }
 }
 
 fn get_config_path() -> Option<PathBuf> {
+    // 1. Environment variable
     if let Ok(path) = env::var("CHITIN_CONFIG") {
         return Some(PathBuf::from(path));
     }
 
+    // 2. Current directory
+    let current_dir_config = PathBuf::from("chitin.toml");
+    if current_dir_config.exists() {
+        return Some(current_dir_config);
+    }
+
+    // 3. ~/.config/chitin/config.toml (Explicit XDG-style support)
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        let xdg_config = base_dirs
+            .home_dir()
+            .join(".config")
+            .join("chitin")
+            .join("config.toml");
+        if xdg_config.exists() {
+            return Some(xdg_config);
+        }
+    }
+
+    // 4. System default (Platform specific)
     if let Some(proj_dirs) = directories::ProjectDirs::from("com", "user", "chitin") {
-        return Some(proj_dirs.config_dir().join("config.toml"));
+        let sys_config = proj_dirs.config_dir().join("config.toml");
+        if sys_config.exists() {
+            return Some(sys_config);
+        }
     }
 
     None

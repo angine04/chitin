@@ -50,6 +50,8 @@ enum Commands {
         #[arg(value_enum)]
         type_: service::ServiceType,
     },
+    /// Reload the daemon configuration
+    Reload,
 }
 
 use config::Config;
@@ -66,6 +68,9 @@ async fn main() -> Result<()> {
         Some(Commands::Service { type_ }) => {
             let content = service::generate(type_)?;
             print!("{}", content);
+        }
+        Some(Commands::Reload) => {
+            service::reload()?;
         }
         Some(Commands::Daemon) | None => {
             // Default to daemon mode
@@ -94,17 +99,57 @@ async fn run_daemon(config: Config) -> Result<()> {
     info!("Chitin: listening on {}", config.server.socket_path);
 
     let session_store = Arc::new(Mutex::new(SessionStore::new(10)));
-    let provider = Arc::from(provider::build_provider(&config)?);
+
+    // Wrap provider in RwLock for hot-swap
+    let provider = Arc::new(tokio::sync::RwLock::new(provider::build_provider(&config)?));
+
+    // Listen for SIGHUP
+    let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        let store = Arc::clone(&session_store);
-        let generator = Arc::clone(&provider);
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(stream, store, generator).await {
-                error!("Chitin error: {err}");
+        tokio::select! {
+            _ = sighup.recv() => {
+                info!("Chitin: received SIGHUP, reloading config...");
+                match Config::load_reload() {
+                    Ok(new_config) => {
+                        match provider::build_provider(&new_config) {
+                            Ok(new_provider) => {
+                                let mut w = provider.write().await;
+                                *w = new_provider;
+                                info!("Chitin: config reloaded successfully");
+                            }
+                            Err(e) => error!("Chitin: failed to build provider from new config: {}", e),
+                        }
+                    }
+                    Err(e) => error!("Chitin: failed to reload config: {}", e),
+                }
             }
-        });
+            accept_result = listener.accept() => {
+                 match accept_result {
+                    Ok((stream, _)) => {
+                        let store = Arc::clone(&session_store);
+                        let provider_lock = Arc::clone(&provider);
+                        tokio::spawn(async move {
+                            // Acquire read lock for the duration of the request generation?
+                            // Or just clone the provider (if it was Arc internal)?
+                            // Since `CommandGenerator` is a trait object, we need to access it.
+                            // To avoid holding the lock for too long (blocking reload),
+                            // we probably want to get a reference to the current provider.
+                            // But `CommandGenerator` is dynamic.
+                            // Simplest approach: hold read lock during generation.
+                            // `handle_connection` will need to take the RwLock.
+
+                            if let Err(err) = handle_connection(stream, store, provider_lock).await {
+                                error!("Chitin error: {err}");
+                            }
+                        });
+                    }
+                    Err(err) => {
+                         error!("Chitin: accept error: {}", err);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -119,7 +164,7 @@ fn init_socket(config: &Config) -> Result<()> {
 async fn handle_connection(
     mut stream: UnixStream,
     sessions: Arc<Mutex<SessionStore>>,
-    generator: Arc<dyn CommandGenerator>,
+    provider_lock: Arc<tokio::sync::RwLock<Box<dyn CommandGenerator>>>,
 ) -> Result<()> {
     let mut buffer = Vec::new();
     let read_result = timeout(
@@ -156,7 +201,7 @@ async fn handle_connection(
         }
     };
 
-    let response = handle_request(request, sessions, generator).await;
+    let response = handle_request(request, sessions, provider_lock).await;
     if let Err(err) = send_response(&mut stream, response).await {
         if is_broken_pipe(&err) {
             return Ok(());
@@ -169,7 +214,7 @@ async fn handle_connection(
 async fn handle_request(
     request: JsonRpcRequest,
     sessions: Arc<Mutex<SessionStore>>,
-    generator: Arc<dyn CommandGenerator>,
+    provider_lock: Arc<tokio::sync::RwLock<Box<dyn CommandGenerator>>>,
 ) -> JsonRpcResponse {
     if request.jsonrpc != "2.0" {
         return invalid_request(request.id, "jsonrpc must be 2.0");
@@ -203,7 +248,12 @@ async fn handle_request(
         last_command: snapshot.last_command,
     };
 
-    match generator.generate(context).await {
+    let generation_result = {
+        let generator = provider_lock.read().await;
+        generator.generate(context).await
+    };
+
+    match generation_result {
         Ok(command) => {
             {
                 let mut store = sessions.lock().expect("session lock");

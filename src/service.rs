@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::ValueEnum;
 use std::env;
 
@@ -10,6 +10,26 @@ pub enum ServiceType {
     Systemd,
     /// Linux OpenRC init script
     Openrc,
+}
+
+pub fn reload() -> Result<()> {
+    // Send SIGHUP to the daemon
+    // We use pkill to find the process with argument "daemon"
+    let status = std::process::Command::new("pkill")
+        .arg("-HUP")
+        .arg("-f")
+        .arg("chitin daemon")
+        .status()
+        .context("Failed to execute pkill")?;
+
+    if status.success() {
+        println!("Reload signal sent to chitin daemon.");
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to reload daemon (process not found?)"
+        ))
+    }
 }
 
 pub fn generate(service_type: ServiceType) -> Result<String> {
